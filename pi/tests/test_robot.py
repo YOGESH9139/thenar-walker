@@ -7,6 +7,11 @@ from thenar_pi.hw import PCA9685
 from thenar_pi.robot import Robot, drive_targets, ramp
 
 
+@pytest.fixture(autouse=True)
+def rotary(monkeypatch):
+    monkeypatch.setattr(config, "GRIPPER", "rotary")
+
+
 @pytest.fixture
 def rig(tmp_path):
     def make(calibrated=True, pca_ok=True):

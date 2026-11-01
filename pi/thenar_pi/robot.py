@@ -1,7 +1,7 @@
 """The robot's rules: a line-for-line port of firmware/thenar_phone/thenar_phone.ino to Python.
 
 Phone -> robot (one text message each):  D thr turn (-100..100, turn > 0 = left)   S speed(0..2)   X (STOP)
-  A 1|0 (arm on/limp)   M mask   Q joint deg (target)   V joint deg_per_s (hold buttons, 0 = stop)   P n (ping)   G (config)
+  A 1|0 (arm on/limp)   M mask   Q joint value (target)   V joint value_per_s (hold buttons, 0 = stop)   P n (ping)   G (config)
 Robot -> phone:  C{json config}   T bat on speed latch q0..q5   P n (pong)
 Calibrator (one line in, one reply line starting OK or ERR):  HELLO  RATE n  OFF  P ch us  REL ch  STATE
   CAL ch zero slope sign min max done  CALSAVE  CALGET
@@ -10,7 +10,7 @@ Safety, unchanged from the ESP32 build: nothing from the phone for 300 ms -> whe
 stays where it is with PWM on (the gripper keeps its grip). STOP latches the wheels until the stick is centred; the
 latch keeps the last stick input (zeroing it would release the latch on the next tick). Every joint starts limp;
 switching a joint on makes it go to its target at once. Angles are clamped to the calibrated safe ends; joints not
-marked done in the calibrator can't be switched on.
+marked done in the calibrator can't be switched on. Parallel J6 uses mm of jaw gap; rotary J6 uses degrees.
 
 The brain (Hasami) is new on the Pi: it sends the phone's messages on its own WebSocket (port 83) and the phone always
 has priority. Real phone input (stick out of the deadband, STOP, arm or speed buttons) takes control for 2 s and the
@@ -116,7 +116,7 @@ class Robot:
                  self.cal.done_mask if self.cal_ok else 0, "  DRY RUN (no robot attached)" if self.dry_run else "")
 
     def apply_cal(self) -> None:
-        """Angle range of every joint = its calibrated safe ends."""
+        """Logical range of every joint = its calibrated safe ends (J6 is mm for parallel)."""
         for i in range(6):
             self.lo[i], self.hi[i] = self.cal.limits_deg(i)
             self.goal[i] = self.cur[i] = clampf(0.0, self.lo[i], self.hi[i])
@@ -195,7 +195,9 @@ class Robot:
     def config_msg(self) -> str:
         r1 = lambda xs: [round(x, 1) for x in xs]
         cfg = {"ssid": self.ssid, "cal": int(self.cal_ok), "pca": int(self.pca_ok), "usable": self.usable_mask(),
-               "on": self.on_mask(), "sp": self.speed, "lo": r1(self.lo), "hi": r1(self.hi), "g": r1(self.goal)}
+               "on": self.on_mask(), "sp": self.speed, "lo": r1(self.lo), "hi": r1(self.hi), "g": r1(self.goal),
+               "gripper": config.GRIPPER, "units": ["deg"] * 5 + (["mm"] if config.GRIPPER == "parallel" else ["deg"]),
+               "velocity": [config.VEL_MAX] * 5 + ([config.GRIPPER_MM_S] if config.GRIPPER == "parallel" else [config.VEL_MAX])}
         return "C" + json.dumps(cfg, separators=(",", ":"))
 
     def telemetry(self) -> str:
@@ -304,7 +306,8 @@ class Robot:
         elif k == "V":
             v = _scan(rest, (_int, float))
             if v and 0 <= v[0] < 6 and math.isfinite(v[1]):
-                self.vel[v[0]] = clampf(v[1], -config.VEL_MAX, config.VEL_MAX)
+                cap = config.GRIPPER_MM_S if v[0] == 5 and config.GRIPPER == "parallel" else config.VEL_MAX
+                self.vel[v[0]] = clampf(v[1], -cap, cap)
         elif k == "P":
             return [c]   # ping: straight back so the phone can show the round trip
         elif k == "G":
@@ -318,7 +321,7 @@ class Robot:
     def calibrator(self, line: str) -> list[str]:
         s = line.strip().upper()
         if s == "HELLO":
-            return [f"OK HELLO tw-armcal 1 sda=2 scl=3 oe={config.OE_PIN} pca={int(self.pca_ok)} chip=rpi app=thenar_pi"]
+            return [f"OK HELLO tw-armcal 1 sda=2 scl=3 oe={config.OE_PIN} pca={int(self.pca_ok)} chip=rpi app=thenar_pi gripper={config.GRIPPER}"]
         if s.startswith("RATE "):
             v = _scan(s[5:], (_int,))
             if v:
@@ -419,7 +422,6 @@ class Robot:
             self.wheel[k] = ramp(self.wheel_t[k], self.wheel[k], step)
             self.motor_write(k, self.wheel[k])
 
-        astep = config.ARM_DPS * dt
         for i in range(6):
             if not self.on[i]:
                 continue
@@ -427,7 +429,8 @@ class Robot:
                 self.goal[i] = clampf(self.goal[i] + self.vel[i] * dt, self.lo[i], self.hi[i])
             if self.cur[i] == self.goal[i]:
                 continue
-            self.cur[i] += clampf(self.goal[i] - self.cur[i], -astep, astep)
+            step = (config.GRIPPER_MM_S if i == 5 and config.GRIPPER == "parallel" else config.ARM_DPS) * dt
+            self.cur[i] += clampf(self.goal[i] - self.cur[i], -step, step)
             self.servo_write(i, self.cur[i])
         rstep = self.raw_rate * dt
         for i in range(6):

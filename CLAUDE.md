@@ -1,7 +1,7 @@
 # Thenar Walker — project brief for Claude
 
 Techfest IIT Bombay **RoboReach 2026-27** rover (finals 15-18 Dec 2026). A 4-wheel skid-steer base carrying the team's
-**thenar-arms** 6-DoF MG996R arm (github.com/nickthelegend/thenar-arms, SO-ARM100 derived). Owner: nickthelegend
+**thenar-arms** 6-DoF arm (github.com/nickthelegend/thenar-arms, SO-ARM100 derived), now using six 25 kg·cm digital PWM servos and a Robonine parallel gripper at J6. Owner: nickthelegend
 (India, builds with a friend; local parts; Bambu P1S + Creality SparkX i7 printers). Reusable methods and pitfalls for
 new projects: [docs/PLAYBOOK.md](docs/PLAYBOOK.md).
 
@@ -17,7 +17,7 @@ arm stops, gripper keeps holding, stays disabled until a new valid command · ha
 | Wheels | Ø140 printed PETG hubs + flat TPU tyre strips, 6.3 mm round bore. Wheelbase 154 (AXLE_X 77) |
 | Drive motors | 4 × local **370 plastic-gearbox** motors: gearbox Ø37.5 × 20, M8 × 13 collar + 13 mm nut through the tub wall, Ø6 shaft with cross-hole, 22 mm long. Passed the 750 ml bottle @ 7 cm lift test. Clearance 51.25 mm at the gearbox bottom, 57 mm at the tub floor (shaft = wheel radius = 70 mm) |
 | Motor driver | **Cytron MDD10A** Rev2, sign-magnitude PWM + DIR, 20 kHz. Ch1 = both left motors in parallel, ch2 = both right |
-| Arm | 6 × MG996R on a **PCA9685** (0x40, 50 Hz, OE active-low). Channels: 0 base pan, 1 shoulder lift, 2 elbow, 3 wrist flex, 4 wrist roll, 5 gripper (= J1..J6) |
+| Arm | 6 × 25 kg·cm digital positional PWM servos (DS3225-class, 180°/270° unknown) on a **PCA9685** (0x40, 50 Hz, OE active-low). Channels: 0 base pan, 1 shoulder lift, 2 elbow, 3 wrist flex, 4 wrist roll, 5 [Robonine parallel rack-and-pinion gripper](https://github.com/roboninecom/SO-ARM100-101-102-Parallel-Gripper/blob/main/docs/specifications.md) (= J1..J6). The pinion's STS3215 disc fit on the DS3225 horn is untested. |
 | Brain | **Raspberry Pi** (moving from the ESP32-S3, Oct 26): `pi/` runs the same protocol and rules in Python and adds a camera for the Hasami brain. The **ESP32-S3** build (CP210x, COM5 on the owner's PC) still works and stays in `firmware/` |
 | Kill switch | KCD4 rocker (`cad/tools/make_kill_switch.py`), cuts all power |
 
@@ -29,7 +29,7 @@ battery sense needs an ADS1115 (0x48), optional. Full table: `docs/WIRING_PI.md`
 confirmed by the team; verify before trusting wheel directions**) · battery sense GPIO1 (100k/27k) · LED 2.
 `docs/WIRING.md` still shows the old classic-ESP32 pins (21/22/13, 25/26/16/17) — it is out of date for the S3.
 
-**Arm calibration** (saved in the robot's NVS `tw-armcal` and in `firmware/thenar_walker_bot/calibration.h`):
+**Historical MG996R rotary calibration only** (saved in the ESP32's NVS `tw-armcal` and in `firmware/thenar_walker_bot/calibration.h`; invalid for the current Pi arm):
 pulse_us = zero + q_deg · us_per_deg · sign, clamped to the safe ends.
 
 | Joint | zero µs | µs/° | sign | safe ends µs | allowed q |
@@ -43,12 +43,12 @@ pulse_us = zero + q_deg · us_per_deg · sign, clamped to the safe ends.
 
 Joint angle meaning (reference poses from MuJoCo): pan 0 = arm forward, + = clockwise from above · shoulder −13.9 =
 upper arm vertical, + leans forward · elbow −73.8 = straight, + bends down · wrist −2.3 = in line, + down ·
-roll 0 = jaws one above the other · gripper 0 = tips 20 mm apart, ~1.35 mm/°. Known issue: J2, J4, J6 (odd PCA
+roll 0 = jaws one above the other · old rotary gripper 0 = tips 20 mm apart, ~1.35 mm/°. On the Pi with `THENAR_GRIPPER=parallel` (default), **J6 is jaw gap in mm**, 0 = closed, calibrated to 20 and 60 mm with calipers; safe range lies within 0–84 mm and motion is capped at 14 mm/s. `THENAR_GRIPPER=rotary` retains the old angular meaning. The record layout and CRC are unchanged; `seed-known` refuses the old numbers in parallel mode. The PWM servo has no torque limit/feedback, so grip to measured item width minus a capped squeeze, never fully closed on an item. Known issue: J2, J4, J6 (odd PCA
 channels) jumped/oscillated on small steps — do the servo-swap test (good servo on a bad channel) before blaming code.
 
-## Control: phone only (current)
+## Control: phone and Hasami brain on the Pi
 On the Pi: `python -m thenar_pi` (folder `pi/`, see `pi/README.md`), a line-for-line port of the firmware below:
-same page, same port-81 WebSocket, same rules; the calibrator talks to it over a WebSocket on port 82 (**Connect Pi
+same page, same port-81 WebSocket, same rules except J6 units/speed; the calibrator talks to it over a WebSocket on port 82 (**Connect Pi
 (Wi-Fi)**), `GET /snap.jpg` serves a camera frame, and the Hasami brain drives through port 83 at lower priority than
 the phone (phone input takes control for 2 s, phone STOP pauses the brain until a human resumes it). `pi/tools/extract_page.py` regenerates its pages from the .ino
 and `docs/calibrator`, so there is one source for each.
@@ -76,7 +76,7 @@ Secrets: `firmware/libraries/ThenarLink/src/team_config.h` (Wi-Fi password + lin
 ## Repo map
 | Path | Status | What |
 |---|---|---|
-| `pi/` | **active** | Raspberry Pi runtime `thenar_pi` (robot rules, server, camera, calibration record, brain channel, AP setup, systemd unit), 33 tests |
+| `pi/` | **active** | Raspberry Pi runtime `thenar_pi` (robot rules, server, camera, calibration record, brain channel, AP setup, systemd unit), 38 tests collected |
 | `firmware/thenar_phone/` | **active** | phone control firmware for the ESP32-S3 (above) |
 | `docs/calibrator/` | **active** | Web Serial arm calibrator (two-reference method, safe ends, Save to robot) |
 | `firmware/libraries/ThenarLink/` | active | shared headers: `tw_armcal.h` (NVS calibration record, CRC, validation), `tw_robot.h` (drive mixing constants, failsafe state machine), `tw_link.h`/`tw_sha256.h` (HMAC UDP link) |
@@ -122,9 +122,9 @@ Web Serial and gamepads).
 
 ## Open items
 1. Bring up the Pi build on the robot: Raspberry Pi OS Bookworm, I2C on, `pwm-2chan` overlay, `i2cdetect` shows 40,
-   `thenar_pi.armcal seed-known`, wheels off the ground, then the phone. Confirm the Pi model and the camera.
+   calibrate all six new servos (never `seed-known` for the parallel gripper), wheels off the ground, then the phone. Confirm the Pi model and the camera.
 2. Confirm the MDD10A pins and wheel directions on the real robot (wheels off the ground).
-3. Servo-swap test for J2/J4/J6; replace bad MG996R clones.
+3. Confirm 180°/270° labels and supply/horn fit for all new servos; test J6 pinion and rack fit, guide test plate D6.0–D6.3, actual open stroke and gripping without crushing. The old J2/J4/J6 jitter was on MG996R clones.
 4. Update `docs/WIRING.md` to the ESP32-S3 pins.
 5. Port `mobile/` (or delete it) and Pad Check's robot link to the WebSocket protocol, if still wanted.
 6. Resync the SolidWorks model to tub v2; re-check arm vs kill switch clearance.

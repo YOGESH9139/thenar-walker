@@ -1,7 +1,7 @@
 """Arm calibration record: the Pi version of ThenarLink/tw_armcal.h.
 
-pulse_us = zero_us + q_deg * us_per_deg * sign. The record keeps the ESP32 struct layout and its CRC32, so the numbers
-mean exactly the same thing on both builds. On the Pi it lives in <STATE_DIR>/armcal.json (written atomically);
+pulse_us = zero_us + q * us_per_deg * sign (q6 is jaw gap in mm for the parallel gripper). The record keeps the ESP32
+struct layout and its CRC32. On the Pi it lives in <STATE_DIR>/armcal.json (written atomically);
 the robot uses it only when magic, version, crc and all six joints are good. Changes are checked on a copy first, so
 a bad number can never make the stored record unloadable.
 
@@ -18,6 +18,8 @@ import sys
 import tempfile
 import zlib
 from pathlib import Path
+
+from . import config
 
 ARMCAL_MAGIC = 0x43415754   # "TWAC"
 ARMCAL_VERSION = 1
@@ -44,6 +46,8 @@ class ArmCal:
     @classmethod
     def defaults(cls) -> "ArmCal":
         c = cls([1500.0] * 6, [f32(5.555556)] * 6, [1] * 6, [1000.0] * 6, [2000.0] * 6)
+        if config.GRIPPER == "parallel":
+            c.zero_us[5], c.us_per_deg[5], c.min_us[5], c.max_us[5] = 600.0, f32(20.0), 600.0, 2000.0
         c.crc = c.compute_crc()
         return c
 
@@ -59,9 +63,17 @@ class ArmCal:
         return zlib.crc32(self.packed()) & 0xFFFFFFFF   # same polynomial and init/xor as tw::crc32
 
     def joint_ok(self, i: int) -> bool:
-        """Physically sane: zero inside its limits, limits inside 500..2500, slope 3..20 us/deg, sign +-1."""
-        return (self.min_us[i] >= 500 and self.max_us[i] <= 2500 and self.min_us[i] < self.zero_us[i] < self.max_us[i]
-                and 3.0 <= self.us_per_deg[i] <= 20.0 and self.sign[i] in (1, -1))
+        """Physically sane pulse range and slope for this joint's configured units."""
+        if not (500 <= self.min_us[i] < self.max_us[i] <= 2500 and self.sign[i] in (1, -1)):
+            return False
+        if i == 5 and config.GRIPPER == "parallel":
+            # 20 mm pinion, ~9 mm pitch radius: ~0.314 mm gap/degree. A 2000 us pulse span gives
+            # ~24 us/mm at 270 degrees or ~35 us/mm at 180 degrees. Leave room for horn/rack variation.
+            if not (500 <= self.zero_us[i] <= 2500 and 15 <= self.us_per_deg[i] <= 60):
+                return False
+            lo, hi = self.limits_deg(i)
+            return 0 <= lo < hi <= 84
+        return self.min_us[i] < self.zero_us[i] < self.max_us[i] and 3 <= self.us_per_deg[i] <= 20
 
     def valid(self) -> bool:
         if self.magic != ARMCAL_MAGIC or self.version != ARMCAL_VERSION or self.crc != self.compute_crc():
@@ -95,7 +107,7 @@ class ArmCal:
         return cls(**{k: v for k, v in d.items() if k in fields})
 
 
-# The Thenar Walker arm as calibrated in the browser calibrator (thenar-walker CLAUDE.md, calibration.h).
+# Historical MG996R rotary arm calibration (thenar-walker CLAUDE.md, calibration.h); never seed for parallel J6.
 KNOWN = {
     "zero_us": [2360.0, 755.7, 1669.2, 796.2, 1920.0, 1460.0],
     "us_per_deg": [10.000, 8.222, 11.778, 14.889, 10.556, 10.000],
@@ -147,6 +159,9 @@ def main(argv: list[str]) -> int:
     from . import config
     cmd = argv[1] if len(argv) > 1 else "show"
     if cmd == "seed-known":
+        if config.GRIPPER != "rotary":
+            print("ERR MG996R seed-known calibration is rotary only; calibrate the parallel gripper in mm", file=sys.stderr)
+            return 1
         c = known()
         if not all(c.joint_ok(i) for i in range(6)):
             print("ERR known numbers fail the joint checks", file=sys.stderr)

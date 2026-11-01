@@ -14,6 +14,13 @@ def _env_int(name: str, default: int) -> int:
     return int(v) if v not in (None, "") else default
 
 
+def _env_gripper() -> str:
+    kind = os.environ.get("THENAR_GRIPPER", "parallel").lower()
+    if kind not in ("parallel", "rotary"):
+        raise ValueError("THENAR_GRIPPER must be parallel or rotary")
+    return kind
+
+
 # ----------------------------------------------------------------- pins (BCM; planned, confirm on the real wiring)
 I2C_BUS = _env_int("I2C_BUS", 1)          # GPIO2 SDA, GPIO3 SCL on the 40-pin header
 OE_PIN = _env_int("OE_PIN", 17)           # PCA9685 OE, active low: HIGH = every servo output off
@@ -37,6 +44,8 @@ TICK_S = 0.010                             # 100 Hz control loop
 TELE_S = 0.100                             # status to the phone
 ARM_DPS = 120.0                            # slew limit toward a slider target
 VEL_MAX = 90.0                             # hold-button speed cap
+GRIPPER = _env_gripper()
+GRIPPER_MM_S = 14.0                        # Robonine's maximum jaw speed
 
 # ----------------------------------------------------------------- drive (ThenarLink/tw_robot.h)
 DRIVE_ACCEL_PER_S = 2.5                    # full scale in 0.4 s

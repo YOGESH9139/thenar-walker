@@ -78,7 +78,8 @@
       <li>Servo power: <b>6 V buck → PCA9685 V+ / GND</b>, never from USB. Put a 470–1000 µF capacitor across V+/GND if you have one.</li>
       <li>Do <b>one joint at a time</b>. When you press <b>Start this joint</b> the servo jumps to its start pulse at full speed (a servo has no position sensor). Keep fingers and cables clear. <b>ALL SERVOS OFF</b> makes everything limp.</li>
       <li>Order: gripper → wrist roll → wrist flex → base pan → elbow → shoulder (light joints first, the heavy shoulder last).</li>
-      <li>For each joint: jog to <b>Reference A</b>, press <b>Set A</b>; jog to <b>Reference B</b>, press <b>Set B</b>. The app works out zero, direction and µs per degree. Then jog to each safe end (stop 3–5° before anything touches) and press <b>Set end</b> twice. <b>Test</b>, then <b>Mark joint done</b>.</li>
+      <li>For each rotary joint: jog to <b>Reference A</b>, press <b>Set A</b>; jog to <b>Reference B</b>, press <b>Set B</b>. The app works out zero, direction and µs per degree. Then jog to each safe end (stop 3–5° before anything touches) and press <b>Set end</b> twice. <b>Test</b>, then <b>Mark joint done</b>.</li>
+      <li>For the Pi's parallel J6, measure the <b>gap between the flat inner jaw faces</b> with calipers. Use 20 mm at A and 60 mm at B, or edit both measured gaps. With no item between the jaws, set safe pulse ends before mechanical contact; the calibrated gap must stay within 0–84 mm. The PWM servo has no torque limit or feedback: never test closing on an item.</li>
       <li>When all 6 are done: <b>Save to robot</b> (stored on the ESP32) and copy <b>calibration.h</b> into firmware/thenar_walker_bot/.</li>
       <li>If the zero pulse lands outside about 1200–1800 µs, move the horn one spline tooth and redo the joint — otherwise one end of the range is too short.</li>
     </ol>
@@ -116,11 +117,12 @@
       <div class="row"><span class="muted">keyboard: ← → = ±10, Shift = ±50, Alt = ±2</span></div>
 
       <div class="refs">
-        <div class="ref"><div><b>Reference A</b> · <span id="refAq"></span>°</div><div id="refAtxt"></div>
+        <div class="ref"><div><b>Reference A</b> · <span id="refAq"></span><span class="jointUnit">°</span></div><div id="refAtxt"></div>
+          <div class="row"><span class="muted">measured value</span><input id="refAedit" type="number" step="0.1" style="width:80px"></div>
           <div class="row"><button id="btnSetA" disabled>Set A here</button><span id="valA" class="muted">—</span></div></div>
-        <div class="ref"><div><b>Reference B</b> · <span id="refBq"></span>°</div><div id="refBtxt"></div>
+        <div class="ref"><div><b>Reference B</b> · <span id="refBq"></span><span class="jointUnit">°</span></div><div id="refBtxt"></div>
           <div class="row"><button id="btnSetB" disabled>Set B here</button><span id="valB" class="muted">—</span>
-          <span class="muted">angle</span><input id="refBedit" type="number" step="0.1" style="width:80px"></div></div>
+          <span class="muted">measured value</span><input id="refBedit" type="number" step="0.1" style="width:80px"></div></div>
       </div>
 
       <div class="row">
@@ -135,7 +137,7 @@
 
       <div class="row">
         <span class="muted">Test:</span>
-        <input id="goDeg" type="number" step="1" value="0" style="width:90px"><button id="btnGo" disabled>Go to angle</button>
+        <input id="goDeg" type="number" step="1" value="0" style="width:90px"><button id="btnGo" disabled>Go to value</button>
         <button id="btnZero" disabled>Go to 0°</button><button id="btnSweep" disabled>Sweep ends</button>
       </div>
 
@@ -196,12 +198,19 @@ const JOINTS = [
     a: { q: 0, t: 'Jaw tips <b>20 mm</b> apart.' },
     b: { q: 30, t: 'Jaw tips <b>60 mm</b> apart.' } },
 ];
+const ROTARY_J6 = JOINTS[5];
+const PARALLEL_J6 = { name: 'gripper_gap', label: 'Parallel gripper (J6)', lo: 0, hi: 84, order: 1,
+  desc: 'Measure the gap between the flat inner jaw faces with calipers. + = opens. Set both safe ends with empty jaws; no torque limit or feedback.',
+  a: { q: 20, t: 'Measure the flat inner jaw faces with calipers; <b>20 mm</b> is the default reference.' },
+  b: { q: 60, t: 'Measure the flat inner jaw faces with calipers; <b>60 mm</b> is the default reference.' } };
+let gripper = 'rotary';
+const unit = (i) => i === 5 && gripper === 'parallel' ? 'mm' : '°';
 const DISPLAY_ORDER = [5, 4, 3, 0, 2, 1];
 
 // ---------------------------------------------------------------- state (kept in this browser too)
-const KEY = 'thenar-armcal-v1';
+let KEY = 'thenar-armcal-v1';
 let S = loadState();
-function blankJoint(i) { return { a: null, b: null, bq: JOINTS[i].b.q, ends: [], done: false }; }
+function blankJoint(i) { return { a: null, b: null, aq: JOINTS[i].a.q, bq: JOINTS[i].b.q, ends: [], done: false }; }
 function loadState() {
   try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.j && s.j.length === 6) return s; } catch (e) {}
   return { j: JOINTS.map((_, i) => blankJoint(i)), sel: 5 };
@@ -211,11 +220,13 @@ function saveState() { try { localStorage.setItem(KEY, JSON.stringify(S)); } cat
 function calOf(i) {               // zero / slope / sign from the two references
   const J = S.j[i], d = JOINTS[i];
   if (!J.a || !J.b) return null;
-  const qa = d.a.q, qb = J.bq;
-  if (Math.abs(qb - qa) < 10) return { err: 'references must be at least 10° apart' };
+  const qa = J.aq ?? d.a.q, qb = J.bq;
+  if (Math.abs(qb - qa) < 10) return { err: `references must be at least 10 ${unit(i)} apart` };
   const k = (J.b - J.a) / (qb - qa);             // signed us per degree
   const usdeg = Math.abs(k), sign = k >= 0 ? 1 : -1, zero = J.a - qa * k;
-  if (usdeg < 3 || usdeg > 20) return { err: `${usdeg.toFixed(2)} µs/° is not plausible (3–20). Re-check A and B.`, usdeg, sign, zero };
+  const minSlope = i === 5 && gripper === 'parallel' ? 15 : 3;
+  const maxSlope = i === 5 && gripper === 'parallel' ? 60 : 20;
+  if (usdeg < minSlope || usdeg > maxSlope) return { err: `${usdeg.toFixed(2)} µs/${unit(i)} is not plausible (${minSlope}–${maxSlope}). Re-check A and B.`, usdeg, sign, zero };
   if (zero < 500 || zero > 2500) return { err: `zero ${zero.toFixed(0)} µs is outside 500–2500`, usdeg, sign, zero };
   return { usdeg, sign, zero };
 }
@@ -226,7 +237,10 @@ function jointReady(i) {
   const c = calOf(i), e = endsOf(i);
   if (!c || c.err) return 'needs A and B';
   if (!e) return 'needs both safe ends';
-  if (!(e[0] < c.zero && c.zero < e[1])) return 'zero is outside the safe ends';
+  if (i === 5 && gripper === 'parallel') {
+    const lo = angleFor(i, e[0]), hi = angleFor(i, e[1]);
+    if (Math.min(lo, hi) < 0 || Math.max(lo, hi) > 84) return 'safe ends must describe gaps within 0–84 mm';
+  } else if (!(e[0] < c.zero && c.zero < e[1])) return 'zero is outside the safe ends';
   return '';
 }
 
@@ -252,6 +266,10 @@ async function afterConnect(noReply) {
   try {
     const r = await cmd('HELLO', 2500).catch(() => null) || await cmd('HELLO', 2500).catch(() => null);
     if (!r || !r.startsWith('OK HELLO')) { setConn(noReply, 'bad'); return; }
+    gripper = / gripper=parallel/.test(r) ? 'parallel' : 'rotary';
+    JOINTS[5] = gripper === 'parallel' ? PARALLEL_J6 : ROTARY_J6;
+    KEY = 'thenar-armcal-v1-' + gripper;
+    S = loadState();
     const pca = / pca=1/.test(r);
     setConn('connected', 'ok');
     const pp = document.getElementById('pca'); pp.textContent = pca ? 'PCA9685 found' : 'PCA9685 NOT found'; pp.className = 'pill ' + (pca ? 'ok' : 'bad');
@@ -355,46 +373,51 @@ function render() {
     const b = document.createElement('button');
     b.className = 'jbtn' + (S.sel === i ? ' sel' : '');
     const st = J.done ? '<span class="pill ok">done</span>' : live[i] ? '<span class="pill warn">holding</span>' : '<span class="pill">—</span>';
-    b.innerHTML = `<span>${n + 1}. ${d.label}<br><small>ch ${i} · ${d.lo}…${d.hi}°</small></span>${st}`;
+    b.innerHTML = `<span>${n + 1}. ${d.label}<br><small>ch ${i} · ${d.lo}…${d.hi}${unit(i)}</small></span>${st}`;
     b.onclick = () => { S.sel = i; saveState(); render(); };
     list.appendChild(b);
   });
   const i = sel(), d = JOINTS[i], J = S.j[i];
   $('jTitle').textContent = `${d.label} — channel ${i}`;
   $('jDesc').textContent = d.desc;
-  $('refAq').textContent = d.a.q; $('refAtxt').innerHTML = d.a.t;
+  $('refAq').textContent = J.aq ?? d.a.q; $('refAtxt').innerHTML = d.a.t; $('refAedit').value = J.aq ?? d.a.q;
   $('refBq').textContent = J.bq; $('refBtxt').innerHTML = d.b.t; $('refBedit').value = J.bq;
+  document.querySelectorAll('.jointUnit').forEach((x) => x.textContent = unit(i));
+  $('btnZero').textContent = `Go to 0${unit(i)}`;
+  $('btnCopy').disabled = gripper === 'parallel';
+  $('btnCopy').title = gripper === 'parallel' ? 'Legacy header uses degrees for J6; use Save to robot for the Pi' : '';
   $('valA').textContent = J.a ? `A = ${J.a} µs` : '—';
   $('valB').textContent = J.b ? `B = ${J.b} µs` : '—';
   const c = calOf(i);
   const co = $('calOut');
   if (!c) { co.textContent = 'needs A and B'; co.className = 'pill'; }
   else if (c.err) { co.textContent = c.err; co.className = 'pill bad'; }
-  else { co.textContent = `zero ${c.zero.toFixed(0)} µs · ${c.usdeg.toFixed(3)} µs/° · sign ${c.sign > 0 ? '+1' : '−1'}`; co.className = 'pill ' + (c.zero < 1200 || c.zero > 1800 ? 'warn' : 'ok'); }
+  else { co.textContent = `zero ${c.zero.toFixed(0)} µs · ${c.usdeg.toFixed(3)} µs/${unit(i)} · sign ${c.sign > 0 ? '+1' : '−1'}`; co.className = 'pill ' + (c.zero < 1200 || c.zero > 1800 ? 'warn' : 'ok'); }
   const e = endsOf(i);
-  $('endsOut').textContent = e ? `ends: ${e[0]} / ${e[1]} µs` + (c && !c.err ? ` (${angleFor(i, e[0]).toFixed(0)}° … ${angleFor(i, e[1]).toFixed(0)}°)` : '') : `ends: ${J.ends.join(' / ') || '— / —'}`;
+  $('endsOut').textContent = e ? `ends: ${e[0]} / ${e[1]} µs` + (c && !c.err ? ` (${angleFor(i, e[0]).toFixed(0)}${unit(i)} … ${angleFor(i, e[1]).toFixed(0)}${unit(i)})` : '') : `ends: ${J.ends.join(' / ') || '— / —'}`;
   $('pulse').textContent = live[i] ? cur[i] : '----';
   if (live[i]) $('slider').value = cur[i];
   const js = $('jState');
-  js.textContent = J.done ? 'done' : live[i] ? 'holding ' + cur[i] + ' µs' + (c && !c.err ? ` ≈ ${angleFor(i, cur[i]).toFixed(1)}°` : '') : 'limp';
+  js.textContent = J.done ? 'done' : live[i] ? 'holding ' + cur[i] + ' µs' + (c && !c.err ? ` ≈ ${angleFor(i, cur[i]).toFixed(1)}${unit(i)}` : '') : 'limp';
   js.className = 'pill ' + (J.done ? 'ok' : live[i] ? 'warn' : '');
-  $('startUs').value = J.done && c && !c.err ? Math.round(c.zero) : ($('startUs').value || 1500);
+  $('startUs').value = J.done && c && !c.err ? Math.round(e ? Math.max(e[0], Math.min(e[1], c.zero)) : c.zero) : ($('startUs').value || 1500);
   const ready = jointReady(i);
   $('btnDone').title = ready || 'all good';
   renderSummary();
 }
 function renderSummary() {
-  const rows = [['joint', 'zero µs', 'µs/°', 'sign', 'min µs', 'max µs', 'range °', 'status']];
+  const rows = [['joint', 'zero µs', 'µs/unit', 'sign', 'min µs', 'max µs', 'range', 'status']];
   JOINTS.forEach((d, i) => {
     const c = calOf(i), e = endsOf(i), J = S.j[i];
     const ok = c && !c.err;
     rows.push([`${i} ${d.name}`, ok ? c.zero.toFixed(0) : '—', ok ? c.usdeg.toFixed(3) : '—', ok ? c.sign : '—', e ? e[0] : '—', e ? e[1] : '—',
-      ok && e ? `${angleFor(i, e[0]).toFixed(0)}…${angleFor(i, e[1]).toFixed(0)}` : '—', J.done ? 'DONE' : (jointReady(i) || 'ready to mark done')]);
+      ok && e ? `${angleFor(i, e[0]).toFixed(0)}…${angleFor(i, e[1]).toFixed(0)} ${unit(i)}` : '—', J.done ? 'DONE' : (jointReady(i) || 'ready to mark done')]);
   });
   $('sumTable').innerHTML = rows.map((r, k) => '<tr>' + r.map((x) => k ? `<td>${x}</td>` : `<th>${x}</th>`).join('') + '</tr>').join('');
   $('calH').textContent = calHeader();
 }
 function calHeader() {
+  if (gripper === 'parallel') return 'Parallel J6 uses millimetres. Save to robot; the legacy calibration.h export assumes six rotary joints.';
   const all = S.j.every((J) => J.done);
   const val = (f, dflt) => JOINTS.map((_, i) => { const c = calOf(i), e = endsOf(i); return S.j[i].done && c && !c.err && e ? f(c, e) : dflt; });
   const fmt = (a, n) => a.map((x) => typeof x === 'number' ? (n === 0 ? String(Math.round(x)) : x.toFixed(n)) : x).join(', ');
@@ -430,6 +453,7 @@ $('rate').onchange = () => { cmd('RATE ' + $('rate').value).catch(() => {}); };
 $('btnSetA').onclick = () => { const i = sel(); if (!live[i]) return msg('Start the joint first.'); S.j[i].a = cur[i]; S.j[i].done = false; saveState(); render(); };
 $('btnSetB').onclick = () => { const i = sel(); if (!live[i]) return msg('Start the joint first.'); S.j[i].b = cur[i]; S.j[i].done = false; saveState(); render(); };
 $('refBedit').onchange = () => { const i = sel(); const v = Number($('refBedit').value); if (isFinite(v)) { S.j[i].bq = v; S.j[i].done = false; saveState(); render(); } };
+$('refAedit').onchange = () => { const i = sel(); const v = Number($('refAedit').value); if (isFinite(v)) { S.j[i].aq = v; S.j[i].done = false; saveState(); render(); } };
 $('btnEnd').onclick = () => {
   const i = sel(); if (!live[i]) return msg('Start the joint first.');
   const J = S.j[i]; if (J.ends.length >= 2) J.ends = []; J.ends.push(cur[i]); J.done = false; saveState(); render();
@@ -438,7 +462,7 @@ $('btnClearEnds').onclick = () => { const i = sel(); S.j[i].ends = []; S.j[i].do
 $('btnGo').onclick = async () => {
   const i = sel(), q = Number($('goDeg').value), us = pulseFor(i, q);
   if (us == null) return msg('Set A and B first.');
-  if (q < JOINTS[i].lo || q > JOINTS[i].hi) return msg(`${q}° is outside this joint's range ${JOINTS[i].lo}…${JOINTS[i].hi}°.`);
+  if (q < JOINTS[i].lo || q > JOINTS[i].hi) return msg(`${q}${unit(i)} is outside this joint's range ${JOINTS[i].lo}…${JOINTS[i].hi}${unit(i)}.`);
   if (!live[i]) return msg('Start the joint first.');
   await sendPulse(i, us);
 };
@@ -463,6 +487,7 @@ $('btnDone').onclick = () => {
 };
 $('btnReset').onclick = () => { const i = sel(); S.j[i] = blankJoint(i); saveState(); render(); msg('Joint reset.'); };
 $('btnSave').onclick = async () => {
+  for (let i = 0; i < 6; i++) if (S.j[i].done && jointReady(i)) return msg(`Cannot save ${JOINTS[i].label}: ${jointReady(i)}.`);
   for (let i = 0; i < 6; i++) {
     const c = calOf(i), e = endsOf(i), J = S.j[i];
     if (c && !c.err && e) await cmd(`CAL ${i} ${c.zero.toFixed(1)} ${c.usdeg.toFixed(5)} ${c.sign} ${e[0]} ${e[1]} ${J.done ? 1 : 0}`);
@@ -477,12 +502,13 @@ $('btnLoad').onclick = async () => {
     if (!m) return;
     const i = Number(m[1]), zero = Number(m[2]), usdeg = Number(m[3]), sign = Number(m[4]), done = m[7] === '1';
     if (!done) return;
-    const qa = JOINTS[i].a.q, qb = S.j[i].bq;
-    S.j[i] = { a: Math.round(zero + qa * usdeg * sign), b: Math.round(zero + qb * usdeg * sign), bq: qb, ends: [Number(m[5]), Number(m[6])], done: true };
+    const qa = S.j[i].aq ?? JOINTS[i].a.q, qb = S.j[i].bq;
+    S.j[i] = { a: Math.round(zero + qa * usdeg * sign), b: Math.round(zero + qb * usdeg * sign), aq: qa, bq: qb, ends: [Number(m[5]), Number(m[6])], done: true };
   });
   saveState(); render(); msg('Loaded the robot\'s saved calibration (joints marked done there).');
 };
 $('btnCopy').onclick = async () => {
+  if (gripper === 'parallel') return msg('The legacy calibration.h export assumes six rotary joints; use Save to robot.');
   try { await navigator.clipboard.writeText(calHeader()); msg('calibration.h copied — paste it into firmware/thenar_walker_bot/calibration.h'); }
   catch (e) { const r = document.createRange(); r.selectNodeContents($('calH')); getSelection().removeAllRanges(); getSelection().addRange(r); msg('Select-all done — press Ctrl+C.'); }
 };

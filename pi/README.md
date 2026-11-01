@@ -8,8 +8,11 @@ drives through its own WebSocket on **port 83** with the phone's messages at low
 control for 2 s (`E manual`), a phone STOP pauses the brain until a human sends `R` (`E paused`), the brain can always
 STOP, and each side has its own 300 ms link timeout. With no brain connected the robot behaves exactly as before.
 
-The ESP32 build stays in `firmware/` and still works; the two speak the same protocol, so the phone page, the
-calibrator and Hasami don't care which brain the robot has.
+The ESP32 build stays in `firmware/` and still works. The Pi defaults to `THENAR_GRIPPER=parallel` for the
+[Robonine rack-and-pinion gripper](https://github.com/roboninecom/SO-ARM100-101-102-Parallel-Gripper/blob/main/docs/specifications.md):
+J6 is jaw gap in mm (0 = closed), capped at 14 mm/s. Set `THENAR_GRIPPER=rotary` for the old claw.
+The `C{json}` message reports `gripper` and each joint's `units`. The calibration bytes/CRC are unchanged,
+but records for one kind are invalid for the other and must not be reused.
 
 ## Wiring (BCM numbers; full table in [docs/WIRING_PI.md](../docs/WIRING_PI.md))
 | Signal | Pi pin | Goes to |
@@ -21,8 +24,9 @@ calibrator and Hasami don't care which brain the robot has.
 | Status LED | GPIO27 (pin 13) | LED + 330 Ω to GND (lit = phone linked, blinking = waiting) |
 | GND | any GND pin | PCA9685 GND, MDD10A GND, buck GND (common ground) |
 
-The Pi gets its **own 5 V 5 A buck** (a Pi 5 needs 5 A for full USB power); the servos keep their own 6 V supply on the
-PCA9685 V+ terminal. Never power servos from the Pi's 5 V pin: an MG996R stall browns out the Pi.
+The Pi gets its **own 5 V 5 A buck** (a Pi 5 needs 5 A for full USB power); the servos keep their own 6 V supply via a
+rated distribution block, with PCA9685 V+/GND as voltage reference. Never run six-servo current through the PCA9685
+terminal or power servos from the Pi's 5 V pin: a stalled 25 kg·cm servo can brown out the Pi.
 Battery voltage needs an ADC (the Pi has none): an ADS1115 on I2C (0x48, AIN0 through the same 100k/27k divider) is
 optional; without it the page shows `-- V`.
 
@@ -38,9 +42,12 @@ sudo .venv/bin/pip install -e ".[pi]"
 sudo i2cdetect -y 1                                     # expect 40 (PCA9685), 70 (all-call), and 48 if an ADS1115 is fitted
 ```
 
-Calibration: the numbers already measured on this arm (CLAUDE.md table) can be stored with
-`sudo .venv/bin/python -m thenar_pi.armcal seed-known`, or measured again with the calibrator:
-open `http://<robot>/calibrator`, press **Connect Pi (Wi-Fi)**. `python -m thenar_pi.armcal show` prints the record.
+Calibration: the old MG996R numbers are **rotary only**; `seed-known` refuses them with the default parallel setting.
+Measure all six installed servos with the calibrator: open `http://<robot>/calibrator`, press **Connect Pi (Wi-Fi)**.
+For J6 measure the gap between the inner jaw faces with calipers at 20 and 60 mm, then set safe pulse ends with empty
+jaws. Its slope should be 15–60 µs/mm; the 180° or 270° servo variant determines reachable stroke. `python -m
+thenar_pi.armcal show` prints the record. The PWM servo has no torque limit or feedback: grip an item by commanding
+measured item width minus a small squeeze, never fully closed. This physical setup is untested on the built robot.
 Without a valid record no joint can be switched on.
 
 ## Run
@@ -51,7 +58,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now thenar-pi
 journalctl -u thenar-pi -f                     # the same log lines as the ESP32's serial monitor
 sudo python3 tools/setup_ap.py "Thenar Walker" # robot Wi-Fi ThenarWalker_TF, WPA2, phone opens http://192.168.4.1
 ```
-`/etc/thenar-pi.env` (optional, not in git) can set `THENAR_SSID=ThenarWalker_TF`, `THENAR_CAMERA=0|off`, or any pin
+`/etc/thenar-pi.env` (optional, not in git) can set `THENAR_SSID=ThenarWalker_TF`, `THENAR_CAMERA=0|off`, `THENAR_GRIPPER=parallel|rotary`, or any pin
 (`THENAR_OE_PIN=17`, ...).
 
 First time on the real robot: **wheels off the ground**, then check each wheel turns the right way with the phone
@@ -61,7 +68,7 @@ stick. If a side runs backwards, swap its motor leads (or flip `SIDE_SIGN` in `t
 ```
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/python -m thenar_pi --dry-run       # page + protocol on :80/:81/:82/:83, no I2C, GPIO or camera
-cd tests && ../.venv/bin/python -m pytest -q  # 33 tests (on Windows: .venv\Scripts\python -m pytest -q)
+cd tests && ../.venv/bin/python -m pytest -q  # 38 tests collected (on Windows: .venv\Scripts\python -m pytest -q)
 ```
 The tests drive the real robot logic, server and sockets on top of recording stand-ins for the I2C bus and the pins
 (`tests/fakes.py`), and compile `tw_armcal.h` to prove the calibration record matches the ESP32's byte for byte.

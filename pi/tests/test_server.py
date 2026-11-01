@@ -8,10 +8,15 @@ import pytest
 import websockets
 from fakes import FakeBus, FakePins
 
-from thenar_pi import armcal
+from thenar_pi import armcal, config
 from thenar_pi.hw import PCA9685
 from thenar_pi.robot import Robot
 from thenar_pi.server import Server
+
+
+@pytest.fixture(autouse=True)
+def rotary(monkeypatch):
+    monkeypatch.setattr(config, "GRIPPER", "rotary")
 
 
 @pytest.fixture

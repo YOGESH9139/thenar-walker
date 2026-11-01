@@ -7,8 +7,14 @@ import pytest
 
 from thenar_pi import armcal
 from thenar_pi.armcal import ArmCal
+from thenar_pi import config
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.fixture(autouse=True)
+def rotary(monkeypatch):
+    monkeypatch.setattr(config, "GRIPPER", "rotary")
 
 
 def test_known_record_is_complete_and_matches_the_table():

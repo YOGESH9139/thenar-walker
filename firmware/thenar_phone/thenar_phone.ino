@@ -550,6 +550,8 @@ button:disabled{opacity:.35}
 </div>
 <script>
 const NAMES=[["J1","Base pan"],["J2","Shoulder"],["J3","Elbow"],["J4","Wrist flex"],["J5","Wrist roll"],["J6","Gripper"]];
+const jointUnit=i=>cfg?.units?.[i]==="mm"?"mm":"°";
+const holdSpeed=i=>i===5&&jointUnit(i)==="mm"?(fine?4:14):(fine?15:50);
 const $=id=>document.getElementById(id);
 let ws=null,open=false,cfg=null,mask=0,sp=1,fine=false,thr=0,trn=0,lastD="",dirty=false,drag=-1,pingT=0;
 const q=[0,0,0,0,0,0],qSend=[null,null,null,null,null,null];
@@ -597,20 +599,20 @@ function build(){
   NAMES.forEach(([id,n],i)=>{
     const ok=(cfg.usable>>i)&1,d=document.createElement("div");d.className="j";
     const minus=i===5?"close":"−",plus=i===5?"open":"+";
-    d.innerHTML=`<div class="n">${id}<small>${n}</small></div><button class="h" data-i="${i}" data-d="-1" ${ok?"":"disabled"}>${minus}</button>
+    d.innerHTML=`<div class="n">${id}<small>${n}${i===5&&jointUnit(i)==="mm"?" · mm gap · hold 4/14 mm/s":""}</small></div><button class="h" data-i="${i}" data-d="-1" ${ok?"":"disabled"}>${minus}</button>
 <div class="slot"><div class="v" id="v${i}">--</div><input type="range" id="r${i}" min="${cfg.lo[i]}" max="${cfg.hi[i]}" step="0.5" value="${q[i]}" ${ok?"":"disabled"}></div>
 <button class="h" data-i="${i}" data-d="1" ${ok?"":"disabled"}>${plus}</button><button class="t" id="t${i}" ${ok?"":"disabled"}>OFF</button>`;
     box.appendChild(d);
     const r=$("r"+i);
     r.addEventListener("pointerdown",()=>drag=i);
     ["pointerup","pointercancel"].forEach(t=>r.addEventListener(t,()=>{drag=-1}));
-    r.oninput=()=>{qSend[i]=+r.value;$("v"+i).textContent=(+r.value).toFixed(1)+"°"};
+    r.oninput=()=>{qSend[i]=+r.value;$("v"+i).textContent=(+r.value).toFixed(1)+jointUnit(i)};
     $("t"+i).onclick=()=>{mask^=1<<i;send("M "+mask);showJoints()};
   });
   box.querySelectorAll(".h").forEach(b=>{
     const i=+b.dataset.i,dir=+b.dataset.d;let p=null;
     const stop=()=>{if(p===null)return;p=null;b.classList.remove("held");send("V "+i+" 0")};
-    b.addEventListener("pointerdown",e=>{p=e.pointerId;try{b.setPointerCapture(p)}catch(_){}b.classList.add("held");send("V "+i+" "+dir*(fine?15:50))});
+    b.addEventListener("pointerdown",e=>{p=e.pointerId;try{b.setPointerCapture(p)}catch(_){}b.classList.add("held");send("V "+i+" "+dir*holdSpeed(i))});
     ["pointerup","pointercancel","lostpointercapture"].forEach(t=>b.addEventListener(t,stop));
   });
   $("calnote").innerHTML=!cfg.pca?'<span class="warn">Servo board (PCA9685) not found: check SDA/SCL and its power.</span>':
@@ -619,7 +621,7 @@ function build(){
   showJoints();
 }
 function showJoints(){if(!cfg)return;
-  for(let i=0;i<6;i++){const r=$("r"+i);if(!r)continue;if(drag!==i){r.value=q[i];$("v"+i).textContent=q[i].toFixed(1)+"°"}
+  for(let i=0;i<6;i++){const r=$("r"+i);if(!r)continue;if(drag!==i){r.value=q[i];$("v"+i).textContent=q[i].toFixed(1)+jointUnit(i)}
     const t=$("t"+i),o=(mask>>i)&1;t.textContent=o?"ON":"OFF";t.classList.toggle("on",!!o)}}
 document.addEventListener("visibilitychange",()=>{if(document.hidden){setStick(0,0);sendDrive(true)}});
 connect();
