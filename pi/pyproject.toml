@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Thenar Walker robot runtime for the Raspberry Pi (port of firmware/thenar_phone)"
 license = { text = "MIT" }
 requires-python = ">=3.11"
-dependencies = ["websockets>=12"]
+dependencies = ["websockets>=12", "pillow>=10"]
 
 [project.optional-dependencies]
 pi = ["smbus2>=0.4", "gpiozero>=2.0", "lgpio>=0.2; platform_machine == 'aarch64'", "opencv-python-headless>=4.8"]

@@ -1,7 +1,7 @@
 """The robot's camera, for the brain (Hasami: SAM + Muse). `GET /snap.jpg` on the robot returns one JPEG.
 
-Picamera2 (CSI camera module) when it is installed and a camera answers; otherwise OpenCV on a USB webcam
-(THENAR_CAMERA=<index>, default 0); otherwise no camera, and /snap.jpg answers 503 "Setup required: no camera".
+THENAR_CAMERA=file:<path> serves the current still image for dry-run demos. Otherwise Picamera2 (CSI camera module)
+when available, or OpenCV on a USB webcam (THENAR_CAMERA=<index>, default 0); otherwise /snap.jpg answers 503.
 A frame is captured only when asked for, so an idle robot spends no CPU on video.
 """
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from pathlib import Path
 
 log = logging.getLogger("thenar_pi.camera")
 
@@ -18,7 +19,15 @@ class Camera:
         self.kind = "none"
         self._lock = threading.Lock()
         self._pc = self._cv = None
-        if os.environ.get("THENAR_CAMERA", "") == "off":
+        self._file = None
+        source = os.environ.get("THENAR_CAMERA", "")
+        if source == "off":
+            return
+        if source.startswith("file:"):
+            path = Path(source[5:]).expanduser()
+            if not path.is_file():
+                raise FileNotFoundError(f"Setup required: camera file does not exist: {path}")
+            self._file, self.kind = path, "file"
             return
         try:
             from picamera2 import Picamera2
@@ -45,6 +54,13 @@ class Camera:
     def jpeg(self, quality: int = 85) -> bytes | None:
         with self._lock:
             try:
+                if self._file is not None:
+                    from io import BytesIO
+                    from PIL import Image
+                    out = BytesIO()
+                    with Image.open(self._file) as still:
+                        still.convert("RGB").save(out, format="JPEG", quality=quality)
+                    return out.getvalue()
                 import cv2
                 if self._pc is not None:
                     frame = self._pc.capture_array()   # RGB888 in Picamera2 = BGR byte order for OpenCV

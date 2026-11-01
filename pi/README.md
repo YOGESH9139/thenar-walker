@@ -58,8 +58,12 @@ sudo systemctl daemon-reload && sudo systemctl enable --now thenar-pi
 journalctl -u thenar-pi -f                     # the same log lines as the ESP32's serial monitor
 sudo python3 tools/setup_ap.py "Thenar Walker" # robot Wi-Fi ThenarWalker_TF, WPA2, phone opens http://192.168.4.1
 ```
-`/etc/thenar-pi.env` (optional, not in git) can set `THENAR_SSID=ThenarWalker_TF`, `THENAR_CAMERA=0|off`, `THENAR_GRIPPER=parallel|rotary`, or any pin
+`/etc/thenar-pi.env` (optional, not in git) can set `THENAR_SSID=ThenarWalker_TF`, `THENAR_CAMERA=0|off|file:<path>`, `THENAR_GRIPPER=parallel|rotary`, or any pin
 (`THENAR_OE_PIN=17`, ...).
+
+For Meta API calls from Hasami on the Pi, use the Pi as a **Wi-Fi client** with internet: `nmcli dev wifi connect <ssid> --ask` (home Wi-Fi or phone hotspot). Put the phone on the same network and open `http://<pi-ip>` (`hostname -I` gives the address). Run Hasami with `--robot 127.0.0.1` on the Pi, or `--robot <pi-ip>` from a laptop. The AP setup above is the no-internet option; local SAM 2.1 runs on a laptop with cached weights. The brain's light Pi install is documented in Hasami's README.
+
+For dry-run demos, set `THENAR_CAMERA=file:/absolute/path/shelf.png` before starting `thenar_pi --dry-run`. Each `/snap.jpg` request reads the current still image and JPEG-encodes it; replacing the file changes the next frame. `/health` reports `"camera": "file"`. The file must exist at startup. This path needs Pillow (included in `thenar-pi` dependencies).
 
 First time on the real robot: **wheels off the ground**, then check each wheel turns the right way with the phone
 stick. If a side runs backwards, swap its motor leads (or flip `SIDE_SIGN` in `thenar_pi/config.py`).
@@ -68,7 +72,7 @@ stick. If a side runs backwards, swap its motor leads (or flip `SIDE_SIGN` in `t
 ```
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/python -m thenar_pi --dry-run       # page + protocol on :80/:81/:82/:83, no I2C, GPIO or camera
-cd tests && ../.venv/bin/python -m pytest -q  # 38 tests collected (on Windows: .venv\Scripts\python -m pytest -q)
+cd tests && ../.venv/bin/python -m pytest -q  # 39 tests collected (on Windows: .venv\Scripts\python -m pytest -q)
 ```
 The tests drive the real robot logic, server and sockets on top of recording stand-ins for the I2C bus and the pins
 (`tests/fakes.py`), and compile `tw_armcal.h` to prove the calibration record matches the ESP32's byte for byte.
