@@ -110,7 +110,7 @@ function build(){
   const box=$("joints");box.innerHTML="";
   NAMES.forEach(([id,n],i)=>{
     const ok=(cfg.usable>>i)&1,d=document.createElement("div");d.className="j";
-    const minus=i===5?"close":"−",plus=i===5?"open":"+";
+    const rot=cfg.gripper==="rotary",minus=i===5?(rot?"open":"close"):"−",plus=i===5?(rot?"close":"open"):"+";   // rotary claw: a higher angle closes
     d.innerHTML=`<div class="n">${id}<small>${n}${i===5&&jointUnit(i)==="mm"?" · mm gap · hold 4/14 mm/s":""}</small></div><button class="h" data-i="${i}" data-d="-1" ${ok?"":"disabled"}>${minus}</button>
 <div class="slot"><div class="v" id="v${i}">--</div><input type="range" id="r${i}" min="${cfg.lo[i]}" max="${cfg.hi[i]}" step="0.5" value="${q[i]}" ${ok?"":"disabled"}></div>
 <button class="h" data-i="${i}" data-d="1" ${ok?"":"disabled"}>${plus}</button><button class="t" id="t${i}" ${ok?"":"disabled"}>OFF</button>`;
