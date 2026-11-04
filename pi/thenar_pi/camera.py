@@ -42,6 +42,8 @@ class Camera:
                 import cv2
                 cap = cv2.VideoCapture(int(os.environ.get("THENAR_CAMERA", "0") or 0))
                 if cap.isOpened():
+                    # many webcams offer 720p only as MJPG; without this they fall back to a small YUYV size
+                    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
                     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
                     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
                     self._cv, self.kind = cap, "usb"
