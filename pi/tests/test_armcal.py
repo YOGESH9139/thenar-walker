@@ -34,6 +34,15 @@ def test_pulse_formula_and_safe_ends():
     assert c.pulse_ok(0, 1300) and not c.pulse_ok(0, 1200)
 
 
+def test_command_exactly_at_a_safe_end_is_never_refused():
+    """limits_deg() round-trips through floats; refusing the result would drop the joint limp at its end stop."""
+    c = armcal.known()
+    c.zero_us[0], c.us_per_deg[0], c.sign[0], c.min_us[0], c.max_us[0] = 1950.7, armcal.f32(7.3361735), -1, 620.9, 2362.7
+    for q in c.limits_deg(0):
+        assert c.pulse_ok(0, c.pulse(0, q))
+    assert not c.pulse_ok(0, 620.8) and not c.pulse_ok(0, 2362.8)   # a real overshoot is still refused
+
+
 def test_save_load_round_trip_keeps_the_crc(tmp_path):
     c = armcal.known()
     assert armcal.save(tmp_path, c)

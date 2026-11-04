@@ -88,7 +88,9 @@ class ArmCal:
 
     def pulse_ok(self, i: int, us: float) -> bool:
         """A commanded angle is allowed only if its pulse stays inside the recorded safe limits."""
-        return self.min_us[i] <= us <= self.max_us[i]
+        # 0.01 us of slack: limits_deg() round-trips through floats, so a command exactly at a safe end can land a
+        # rounding error outside it, and servo_write() would then drop that joint limp (a falling arm).
+        return self.min_us[i] - 0.01 <= us <= self.max_us[i] + 0.01
 
     def limits_deg(self, i: int) -> tuple[float, float]:
         a = (self.min_us[i] - self.zero_us[i]) / (self.us_per_deg[i] * self.sign[i])
